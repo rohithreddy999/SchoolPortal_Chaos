@@ -1,0 +1,15 @@
+.venv/
+backend/.venv/
+__pycache__/
+*.pyc
+.env
+backend/.env
+frontend/.env
+backend/.pytest_cache/
+backend/.mypy_cache/
+frontend/node_modules/
+frontend/dist/
+.runtime/
+postgres-runtime/
+backups/
+*.log
