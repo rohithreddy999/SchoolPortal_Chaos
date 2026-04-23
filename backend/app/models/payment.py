@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -45,6 +45,10 @@ class PaymentTransaction(Base):
 
 class PaymentAllocation(Base):
     __tablename__ = "payment_allocations"
+    __table_args__ = (
+        UniqueConstraint("transaction_id", "component", name="uq_payment_allocations_transaction_component"),
+        CheckConstraint("amount > 0", name="ck_payment_allocations_amount_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     transaction_id: Mapped[int] = mapped_column(ForeignKey("payment_transactions.id", ondelete="CASCADE"), index=True)

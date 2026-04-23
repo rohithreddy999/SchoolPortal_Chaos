@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import ChangePasswordForm from "./components/ChangePasswordForm";
 import LoginForm from "./components/LoginForm";
 import StudentDetails from "./components/StudentDetails";
 import StudentForm from "./components/StudentForm";
 import StudentSearch, { emptySearchFilters } from "./components/StudentSearch";
 import {
+  changePassword,
   createStudent,
   downloadPaymentReceipt,
   downloadStudentPaymentHistory,
@@ -127,6 +129,9 @@ export default function App() {
   const [studentLoadError, setStudentLoadError] = useState("");
   const [studentFormMode, setStudentFormMode] = useState(null);
   const [studentFormScrollKey, setStudentFormScrollKey] = useState(0);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [savingStudent, setSavingStudent] = useState(false);
   const [paymentError, setPaymentError] = useState("");
@@ -178,6 +183,8 @@ export default function App() {
     setSelectedStudent(null);
     setStudentLoadError("");
     setStudentFormMode(null);
+    setShowPasswordForm(false);
+    setPasswordError("");
     setSearchResults([]);
     setHasSearched(false);
     saveSession(null);
@@ -229,6 +236,24 @@ export default function App() {
       return null;
     } finally {
       setSavingStudent(false);
+    }
+  }
+
+  async function handlePasswordChange(form) {
+    if (!session?.token) {
+      return null;
+    }
+
+    setChangingPassword(true);
+    setPasswordError("");
+    try {
+      const result = await changePassword(session.token, form);
+      return result.detail;
+    } catch (error) {
+      setPasswordError(error.message);
+      return null;
+    } finally {
+      setChangingPassword(false);
     }
   }
 
@@ -312,6 +337,7 @@ export default function App() {
 
   function handleOpenCreateForm() {
     setSaveError("");
+    setShowPasswordForm(false);
     setStudentFormMode("create");
     setStudentFormScrollKey((current) => current + 1);
   }
@@ -321,6 +347,7 @@ export default function App() {
       return;
     }
     setSaveError("");
+    setShowPasswordForm(false);
     setStudentFormMode("edit");
     setStudentFormScrollKey((current) => current + 1);
   }
@@ -328,6 +355,17 @@ export default function App() {
   function handleCloseStudentForm() {
     setSaveError("");
     setStudentFormMode(null);
+  }
+
+  function handleTogglePasswordForm() {
+    setPasswordError("");
+    setShowPasswordForm((current) => {
+      const next = !current;
+      if (next) {
+        setStudentFormMode(null);
+      }
+      return next;
+    });
   }
 
   if (!session?.token) {
@@ -352,6 +390,9 @@ export default function App() {
             <span>Signed in as</span>
             <strong>{user?.username}</strong>
           </div>
+          <button type="button" className="ghost-button" onClick={handleTogglePasswordForm}>
+            {showPasswordForm ? "Hide Password" : "Change Password"}
+          </button>
           <button type="button" className="ghost-button" onClick={handleLogout}>
             Logout
           </button>
@@ -360,6 +401,18 @@ export default function App() {
 
       <main className="dashboard-grid">
         <div className="left-column">
+          {showPasswordForm ? (
+            <ChangePasswordForm
+              saving={changingPassword}
+              error={passwordError}
+              onSave={handlePasswordChange}
+              onClose={() => {
+                setPasswordError("");
+                setShowPasswordForm(false);
+              }}
+            />
+          ) : null}
+
           <section className="panel workspace-panel">
             <div>
               <p className="eyebrow">Workspace</p>

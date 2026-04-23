@@ -205,6 +205,8 @@ export default function StudentDetails({
 
   async function handleSubmit(event) {
     event.preventDefault();
+    setCurrentReceiptTransactionId(null);
+    setReceiptError("");
     const allocations = student.fee_summary.components
       .map((component) => ({
         component: component.component,

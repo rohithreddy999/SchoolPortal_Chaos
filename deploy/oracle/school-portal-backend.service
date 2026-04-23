@@ -1,0 +1,17 @@
+[Unit]
+Description=School Fee Portal FastAPI Backend
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/school-fee-portal/backend
+EnvironmentFile=/opt/school-fee-portal/backend/.env
+ExecStart=/opt/school-fee-portal/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

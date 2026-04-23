@@ -236,6 +236,14 @@ p {
   border: 1px solid rgba(184, 92, 56, 0.16);
 }
 
+.success-banner {
+  padding: 0.95rem 1rem;
+  border-radius: 16px;
+  background: rgba(34, 139, 34, 0.12);
+  color: #1f6b1f;
+  border: 1px solid rgba(34, 139, 34, 0.18);
+}
+
 .topbar {
   display: flex;
   justify-content: space-between;

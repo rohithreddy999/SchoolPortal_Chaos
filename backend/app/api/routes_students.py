@@ -36,6 +36,7 @@ from app.services.student_reports import (
 
 router = APIRouter(prefix="/students", tags=["students"])
 settings = get_settings()
+MAX_STUDENT_SEARCH_RESULTS = 1000
 
 
 def get_integrity_error_detail(exc: IntegrityError, fallback: str) -> str:
@@ -48,6 +49,8 @@ def get_integrity_error_detail(exc: IntegrityError, fallback: str) -> str:
         "ck_students_student_aadhaar_format": "Student Aadhaar must contain exactly 12 digits",
         "ck_students_father_aadhaar_format": "Father Aadhaar must contain exactly 12 digits",
         "ck_students_distinct_aadhaar_values": "Student Aadhaar and Father's Aadhaar cannot be the same",
+        "uq_payment_allocations_transaction_component": "Each fee component can be recorded only once in a payment entry",
+        "ck_payment_allocations_amount_positive": "Payment amounts must be greater than zero",
     }
     return constraint_messages.get(constraint_name, fallback)
 
@@ -220,7 +223,7 @@ def list_students(
     if class_name:
         query = query.filter(Student.class_name == class_name)
 
-    students = query.order_by(Student.student_name.asc()).limit(100).all()
+    students = query.order_by(Student.student_name.asc()).limit(MAX_STUDENT_SEARCH_RESULTS).all()
     return [to_student_list_item(student) for student in students]
 
 
@@ -280,7 +283,7 @@ def update_student(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> StudentRead:
-    student = get_student_or_404(db, student_id)
+    student = get_student_or_404(db, student_id, for_update=True)
     validate_fee_schedule_against_paid_amounts(student, payload)
     ensure_valid_aadhaar_relationship(
         db,
@@ -359,7 +362,17 @@ def record_payment(
     db.add(transaction)
     db.flush()
     transaction.receipt_number = f"SSHS-{payload.received_on.year}-{transaction.id:06d}"
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=get_integrity_error_detail(
+                exc,
+                "The payment could not be recorded because it conflicts with existing receipt data",
+            ),
+        ) from exc
     db.expire_all()
     student = get_student_or_404(db, student.id)
     return to_student_read(student)

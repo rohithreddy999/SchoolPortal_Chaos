@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+const API_BASE = (import.meta.env.VITE_API_URL || "/api").replace(/\/$/, "");
 
 async function request(path, { method = "GET", token, body } = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -58,6 +58,10 @@ export function login(credentials) {
 
 export function getCurrentUser(token) {
   return request("/auth/me", { token });
+}
+
+export function changePassword(token, payload) {
+  return request("/auth/change-password", { method: "POST", token, body: payload });
 }
 
 export function searchStudents(token, filters) {
