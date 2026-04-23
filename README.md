@@ -119,6 +119,40 @@ This creates a timestamped dump in `backups/` and removes old dumps beyond the r
 
 For operational guidance on migrations, recovery, and backup strategy, see `OPERATIONS.md`.
 
+## Deployment
+
+### Backend on Render
+
+This repository includes `render.yaml` for blueprint-based deployment.
+
+1. Push this repository to GitHub.
+2. In Render, create a new **Blueprint** and select this repo.
+3. Render will detect `render.yaml` and create `school-fee-portal-backend`.
+4. Set required environment variables in Render service settings:
+   - `DATABASE_URL` (Neon connection string, keep `sslmode=require`)
+   - `SECRET_KEY` (long random value)
+   - `DEFAULT_ADMIN_PASSWORD` (replace default)
+   - `BACKEND_CORS_ORIGINS` (your Netlify app URL, for example `https://your-app.netlify.app`)
+5. Deploy. Render runs migrations at startup (`alembic upgrade head`) before launching Uvicorn.
+
+Backend URL examples after deploy:
+
+- API base: `https://<your-render-service>.onrender.com/api`
+- Healthcheck: `https://<your-render-service>.onrender.com/health`
+- Swagger docs: `https://<your-render-service>.onrender.com/docs`
+
+### Frontend on Netlify
+
+The repository already includes `netlify.toml`.
+
+1. In Netlify, import the same GitHub repository.
+2. Build configuration is read from `netlify.toml` (`frontend` base, `npm ci && npm run build`, `dist` publish).
+3. Add environment variable in Netlify:
+   - `VITE_API_URL=https://<your-render-service>.onrender.com/api`
+4. Deploy the site.
+
+Once both are live, make sure `BACKEND_CORS_ORIGINS` on Render exactly matches the Netlify URL.
+
 ## Migration workflow
 
 Create a new migration after model changes:

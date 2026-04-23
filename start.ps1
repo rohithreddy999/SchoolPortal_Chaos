@@ -59,17 +59,24 @@ function Get-DatabaseSettings([string]$EnvFile) {
     }
 
     $databaseUrl = $databaseUrlLine -replace "^DATABASE_URL=", ""
-    $pattern = "^postgresql\+psycopg://(?<user>[^:]+):(?<password>[^@]+)@(?<host>[^:\/]+):(?<port>\d+)\/(?<database>.+)$"
+    $pattern = "^postgresql\+psycopg://(?<user>[^:]+):(?<password>[^@]+)@(?<host>[^:\/\?]+)(:(?<port>\d+))?\/(?<database>[^\?]+)(\?.*)?$"
     if ($databaseUrl -notmatch $pattern) {
         throw "DATABASE_URL format is not supported by start.ps1: '$databaseUrl'."
     }
+
+    $resolvedPort = 5432
+    if ($Matches.port) {
+        $resolvedPort = [int]$Matches.port
+    }
+    $isLocalHost = @("localhost", "127.0.0.1", "::1") -contains $Matches.host.ToLower()
 
     return @{
         User = $Matches.user
         Password = $Matches.password
         Host = $Matches.host
-        Port = [int]$Matches.port
+        Port = $resolvedPort
         Database = $Matches.database
+        IsLocal = $isLocalHost
     }
 }
 
@@ -236,7 +243,11 @@ $venvPython = Ensure-BackendEnvironment
 Ensure-FrontendEnvironment
 $npm = Get-CommandPath "npm.cmd"
 $dbSettings = Get-DatabaseSettings (Join-Path $backendDir ".env")
-Ensure-ProjectDatabase $dbSettings
+if ($dbSettings.IsLocal) {
+    Ensure-ProjectDatabase $dbSettings
+} else {
+    Write-Step "Using remote PostgreSQL host '$($dbSettings.Host)'; skipping local PostgreSQL setup."
+}
 Run-DatabaseMigrations $venvPython
 
 $backendProcess = Get-ListeningProcess 8000
