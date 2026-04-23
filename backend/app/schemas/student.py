@@ -12,7 +12,7 @@ class StudentBase(BaseModel):
     student_name: str = Field(min_length=1, max_length=120)
     father_name: str = Field(min_length=1, max_length=120)
     mother_name: str | None = Field(default=None, max_length=120)
-    mobile_number: str = Field(min_length=7, max_length=20)
+    mobile_number: str = Field(min_length=10, max_length=20)
     class_name: str = Field(min_length=1, max_length=30)
     section: str = Field(min_length=1, max_length=10)
     student_aadhaar: str | None = Field(default=None, max_length=20)
@@ -51,6 +51,14 @@ class StudentBase(BaseModel):
         if value > transport_fee:
             raise ValueError("Transport concession cannot exceed transport fee")
         return value
+
+    @field_validator("mobile_number", mode="before")
+    @classmethod
+    def normalize_mobile_number(cls, value: str) -> str:
+        digits_only = "".join(character for character in str(value) if character.isdigit())
+        if len(digits_only) != 10:
+            raise ValueError("Mobile number must contain exactly 10 digits")
+        return digits_only
 
     @field_validator("student_aadhaar", "father_aadhaar", mode="before")
     @classmethod

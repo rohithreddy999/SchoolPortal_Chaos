@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const blankStudent = {
   academic_year: "",
@@ -31,6 +31,12 @@ const feeFields = [
   ["books_fee", "Books Fee"],
   ["concession_transport", "Transport Concession"]
 ];
+
+const digitFieldLengths = {
+  mobile_number: 10,
+  student_aadhaar: 12,
+  father_aadhaar: 12
+};
 
 function toFormValue(student) {
   if (!student) {
@@ -65,15 +71,34 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export default function StudentForm({ mode, student, onSave, saving, error, onClose }) {
+export default function StudentForm({ mode, student, onSave, saving, error, onClose, scrollRequestKey }) {
   const [form, setForm] = useState(blankStudent);
+  const [localError, setLocalError] = useState("");
+  const formRef = useRef(null);
 
   useEffect(() => {
     setForm(toFormValue(student));
-  }, [student]);
+    setLocalError("");
+  }, [mode, student]);
+
+  useEffect(() => {
+    if (!scrollRequestKey) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [scrollRequestKey]);
 
   function handleChange(event) {
     const { name, value } = event.target;
+    setLocalError("");
+    if (digitFieldLengths[name]) {
+      const digitsOnly = value.replace(/\D/g, "").slice(0, digitFieldLengths[name]);
+      setForm((current) => ({ ...current, [name]: digitsOnly }));
+      return;
+    }
     setForm((current) => ({ ...current, [name]: value }));
   }
 
@@ -94,13 +119,19 @@ export default function StudentForm({ mode, student, onSave, saving, error, onCl
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (form.student_aadhaar && form.father_aadhaar && form.student_aadhaar === form.father_aadhaar) {
+      setLocalError("Student Aadhaar and Father's Aadhaar cannot be the same.");
+      return;
+    }
+
+    setLocalError("");
     await onSave(form);
   }
 
   const isEditMode = mode === "edit" && student;
 
   return (
-    <section className="panel form-panel">
+    <section className="panel form-panel" ref={formRef}>
       <div className="panel-heading compact">
         <div>
           <p className="eyebrow">{isEditMode ? "Edit student" : "New student"}</p>
@@ -142,7 +173,17 @@ export default function StudentForm({ mode, student, onSave, saving, error, onCl
             </label>
             <label>
               Mobile Number
-              <input name="mobile_number" value={form.mobile_number} onChange={handleChange} required />
+              <input
+                name="mobile_number"
+                value={form.mobile_number}
+                onChange={handleChange}
+                inputMode="numeric"
+                minLength={10}
+                maxLength={10}
+                pattern="[0-9]{10}"
+                placeholder="10-digit mobile number"
+                required
+              />
             </label>
             <label>
               Class
@@ -159,6 +200,9 @@ export default function StudentForm({ mode, student, onSave, saving, error, onCl
                 value={form.student_aadhaar}
                 onChange={handleChange}
                 inputMode="numeric"
+                minLength={12}
+                maxLength={12}
+                pattern="[0-9]{12}"
                 placeholder="12-digit Aadhaar"
               />
             </label>
@@ -169,6 +213,9 @@ export default function StudentForm({ mode, student, onSave, saving, error, onCl
                 value={form.father_aadhaar}
                 onChange={handleChange}
                 inputMode="numeric"
+                minLength={12}
+                maxLength={12}
+                pattern="[0-9]{12}"
                 placeholder="12-digit Aadhaar"
               />
             </label>
@@ -206,7 +253,7 @@ export default function StudentForm({ mode, student, onSave, saving, error, onCl
           </div>
         </div>
 
-        {error ? <div className="error-banner">{error}</div> : null}
+        {localError || error ? <div className="error-banner">{localError || error}</div> : null}
 
         <button type="submit" className="primary-button" disabled={saving}>
           {saving ? "Saving..." : isEditMode ? "Update Student" : "Create Student"}

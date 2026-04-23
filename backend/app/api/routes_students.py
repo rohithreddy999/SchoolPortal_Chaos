@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_db
@@ -26,7 +27,11 @@ from app.services.student_balances import (
     get_component_assessed_values,
     get_component_paid,
 )
-from app.services.student_reports import build_student_statement_pdf
+from app.services.student_reports import (
+    build_payment_history_pdf,
+    build_payment_receipt_pdf,
+    build_student_statement_pdf,
+)
 
 
 router = APIRouter(prefix="/students", tags=["students"])
@@ -39,8 +44,10 @@ def get_integrity_error_detail(exc: IntegrityError, fallback: str) -> str:
     constraint_messages = {
         "uq_student_admission_year": "A student with this admission number already exists for the selected academic year",
         "uq_students_student_aadhaar": "A student with this Aadhaar number already exists",
+        "ck_students_mobile_number_format": "Mobile number must contain exactly 10 digits",
         "ck_students_student_aadhaar_format": "Student Aadhaar must contain exactly 12 digits",
         "ck_students_father_aadhaar_format": "Father Aadhaar must contain exactly 12 digits",
+        "ck_students_distinct_aadhaar_values": "Student Aadhaar and Father's Aadhaar cannot be the same",
     }
     return constraint_messages.get(constraint_name, fallback)
 
@@ -61,6 +68,16 @@ def get_student_or_404(db: Session, student_id: int, *, for_update: bool = False
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     return student
+
+
+def get_student_transaction_or_404(student: Student, transaction_id: int) -> PaymentTransaction:
+    transaction = next(
+        (item for item in student.payment_transactions if item.id == transaction_id),
+        None,
+    )
+    if not transaction:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment transaction not found")
+    return transaction
 
 
 def to_student_list_item(student: Student) -> StudentListItem:
@@ -134,25 +151,51 @@ def validate_fee_schedule_against_paid_amounts(student: Student, payload: Studen
             )
 
 
-def ensure_unique_student_aadhaar(
+def ensure_valid_aadhaar_relationship(
     db: Session,
     student_aadhaar: str | None,
+    father_aadhaar: str | None,
     *,
     current_student_id: int | None = None,
 ) -> None:
-    if not student_aadhaar:
-        return
-
-    query = db.query(Student).filter(Student.student_aadhaar == student_aadhaar)
-    if current_student_id is not None:
-        query = query.filter(Student.id != current_student_id)
-
-    existing = query.first()
-    if existing:
+    if student_aadhaar and father_aadhaar and student_aadhaar == father_aadhaar:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A student with this Aadhaar number already exists",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Student Aadhaar and Father's Aadhaar cannot be the same",
         )
+
+    if student_aadhaar:
+        student_query = db.query(Student).filter(
+            or_(
+                Student.student_aadhaar == student_aadhaar,
+                Student.father_aadhaar == student_aadhaar,
+            )
+        )
+        if current_student_id is not None:
+            student_query = student_query.filter(Student.id != current_student_id)
+
+        existing_student = student_query.first()
+        if existing_student:
+            if existing_student.student_aadhaar == student_aadhaar:
+                detail = "A student with this Aadhaar number already exists"
+            else:
+                detail = "This Aadhaar number is already used as a father's Aadhaar in another student record"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=detail,
+            )
+
+    if father_aadhaar:
+        father_query = db.query(Student).filter(Student.student_aadhaar == father_aadhaar)
+        if current_student_id is not None:
+            father_query = father_query.filter(Student.id != current_student_id)
+
+        existing_father_conflict = father_query.first()
+        if existing_father_conflict:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Aadhaar number is already used as a student's Aadhaar in another record",
+            )
 
 
 @router.get("", response_model=list[StudentListItem])
@@ -164,6 +207,9 @@ def list_students(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[StudentListItem]:
+    if not any([admission_number, academic_year, student_name, class_name]):
+        return []
+
     query = db.query(Student)
     if admission_number:
         query = query.filter(Student.admission_number == admission_number)
@@ -197,7 +243,7 @@ def create_student(
             status_code=status.HTTP_409_CONFLICT,
             detail="A student with this admission number already exists for the selected academic year",
         )
-    ensure_unique_student_aadhaar(db, payload.student_aadhaar)
+    ensure_valid_aadhaar_relationship(db, payload.student_aadhaar, payload.father_aadhaar)
 
     student = Student(**payload.model_dump())
     db.add(student)
@@ -236,7 +282,12 @@ def update_student(
 ) -> StudentRead:
     student = get_student_or_404(db, student_id)
     validate_fee_schedule_against_paid_amounts(student, payload)
-    ensure_unique_student_aadhaar(db, payload.student_aadhaar, current_student_id=student_id)
+    ensure_valid_aadhaar_relationship(
+        db,
+        payload.student_aadhaar,
+        payload.father_aadhaar,
+        current_student_id=student_id,
+    )
 
     duplicate = (
         db.query(Student)
@@ -323,5 +374,33 @@ def download_student_statement_pdf(
     student = get_student_or_404(db, student_id)
     pdf_bytes = build_student_statement_pdf(student, settings.school_name)
     filename = f"{student.admission_number}_{student.academic_year}_statement.pdf".replace(" ", "_")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
+
+@router.get("/{student_id}/payments/{transaction_id}/receipt.pdf")
+def download_payment_receipt_pdf(
+    student_id: int,
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    student = get_student_or_404(db, student_id)
+    transaction = get_student_transaction_or_404(student, transaction_id)
+    pdf_bytes = build_payment_receipt_pdf(student, transaction, settings.school_name)
+    filename = f"{transaction.receipt_number}_receipt.pdf".replace(" ", "_")
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)
+
+
+@router.get("/{student_id}/payment-history.pdf")
+def download_student_payment_history_pdf(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    student = get_student_or_404(db, student_id)
+    pdf_bytes = build_payment_history_pdf(student, settings.school_name)
+    filename = f"{student.admission_number}_{student.academic_year}_payment_history.pdf".replace(" ", "_")
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf", headers=headers)

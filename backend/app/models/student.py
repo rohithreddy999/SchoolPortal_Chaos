@@ -19,13 +19,18 @@ class Student(Base):
         CheckConstraint("books_fee >= 0", name="ck_students_books_fee_non_negative"),
         CheckConstraint("concession_transport >= 0", name="ck_students_concession_transport_non_negative"),
         CheckConstraint("concession_transport <= transport_fee", name="ck_students_concession_within_transport"),
+        CheckConstraint("mobile_number ~ '^[0-9]{10}$'", name="ck_students_mobile_number_format"),
         CheckConstraint(
-            "student_aadhaar IS NULL OR char_length(student_aadhaar) = 12",
+            "student_aadhaar IS NULL OR student_aadhaar ~ '^[0-9]{12}$'",
             name="ck_students_student_aadhaar_format",
         ),
         CheckConstraint(
-            "father_aadhaar IS NULL OR char_length(father_aadhaar) = 12",
+            "father_aadhaar IS NULL OR father_aadhaar ~ '^[0-9]{12}$'",
             name="ck_students_father_aadhaar_format",
+        ),
+        CheckConstraint(
+            "student_aadhaar IS NULL OR father_aadhaar IS NULL OR student_aadhaar <> father_aadhaar",
+            name="ck_students_distinct_aadhaar_values",
         ),
     )
 

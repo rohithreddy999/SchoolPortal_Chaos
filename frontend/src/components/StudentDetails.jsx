@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SCHOOL_NAME } from "../lib/branding";
 
 const currency = new Intl.NumberFormat("en-IN", {
@@ -30,12 +30,17 @@ function maskIdentifier(value, visibleDigits = 4) {
     return "-";
   }
 
-  const text = String(value);
-  if (text.length <= visibleDigits) {
-    return text;
+  const digits = String(value).replace(/\D/g, "");
+  if (!digits) {
+    return "-";
   }
 
-  return `${"•".repeat(Math.max(0, text.length - visibleDigits))}${text.slice(-visibleDigits)}`;
+  if (digits.length <= visibleDigits) {
+    return digits;
+  }
+
+  const masked = `${"X".repeat(Math.max(0, digits.length - visibleDigits))}${digits.slice(-visibleDigits)}`;
+  return masked.replace(/(.{4})/g, "$1 ").trim();
 }
 
 function formatDate(value, formatter = shortDate) {
@@ -63,6 +68,16 @@ function getTransactionTotal(transaction) {
   return transaction.allocations.reduce((sum, allocation) => sum + Number(allocation.amount || 0), 0);
 }
 
+function scrollToSection(element) {
+  if (!element) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    element.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
+
 function makePaymentState(student) {
   const base = {
     received_on: today,
@@ -85,6 +100,8 @@ export default function StudentDetails({
   loadError,
   onRecordPayment,
   onDownloadStatement,
+  onDownloadPaymentReceipt,
+  onDownloadPaymentHistory,
   savingPayment,
   error,
   onEditStudent
@@ -96,17 +113,30 @@ export default function StudentDetails({
   const [selectedTransactionId, setSelectedTransactionId] = useState(null);
   const [statementError, setStatementError] = useState("");
   const [downloadingStatement, setDownloadingStatement] = useState(false);
+  const [receiptError, setReceiptError] = useState("");
+  const [downloadingReceipt, setDownloadingReceipt] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [downloadingHistory, setDownloadingHistory] = useState(false);
+  const [currentReceiptTransactionId, setCurrentReceiptTransactionId] = useState(null);
+  const paymentSectionRef = useRef(null);
 
   useEffect(() => {
     setPaymentForm(makePaymentState(student));
     setSelectedTransactionId(student?.payment_transactions[0]?.id ?? null);
     setShowPaymentForm(false);
     setStatementError("");
+    setReceiptError("");
+    setHistoryError("");
   }, [student]);
+
+  useEffect(() => {
+    setCurrentReceiptTransactionId(null);
+  }, [student?.id]);
 
   useEffect(() => {
     if (error) {
       setShowPaymentForm(true);
+      scrollToSection(paymentSectionRef.current);
     }
   }, [error]);
 
@@ -168,6 +198,8 @@ export default function StudentDetails({
 
   function handleChange(event) {
     const { name, value } = event.target;
+    setReceiptError("");
+    setCurrentReceiptTransactionId(null);
     setPaymentForm((current) => ({ ...current, [name]: value }));
   }
 
@@ -180,11 +212,17 @@ export default function StudentDetails({
       }))
       .filter((item) => item.amount > 0);
 
-    await onRecordPayment({
+    const updatedStudent = await onRecordPayment({
       received_on: paymentForm.received_on,
       note: paymentForm.note,
       allocations
     });
+
+    const nextTransactionId = updatedStudent?.payment_transactions?.[0]?.id ?? null;
+    if (nextTransactionId) {
+      setCurrentReceiptTransactionId(nextTransactionId);
+      setSelectedTransactionId(nextTransactionId);
+    }
   }
 
   async function handleStatementDownload() {
@@ -196,6 +234,51 @@ export default function StudentDetails({
       setStatementError(downloadError.message);
     } finally {
       setDownloadingStatement(false);
+    }
+  }
+
+  async function handleReceiptDownload() {
+    if (!currentReceiptTransactionId) {
+      setReceiptError(
+        "Receipt PDF is available only immediately after saving a payment here. Use History PDF in Payment history for older receipts."
+      );
+      return;
+    }
+
+    setReceiptError("");
+    setDownloadingReceipt(true);
+    try {
+      await onDownloadPaymentReceipt(currentReceiptTransactionId);
+    } catch (downloadError) {
+      setReceiptError(downloadError.message);
+    } finally {
+      setDownloadingReceipt(false);
+    }
+  }
+
+  function handleOpenPaymentSection() {
+    setShowPaymentForm(true);
+    scrollToSection(paymentSectionRef.current);
+  }
+
+  function handlePaymentSectionToggle() {
+    if (showPaymentForm) {
+      setShowPaymentForm(false);
+      return;
+    }
+
+    handleOpenPaymentSection();
+  }
+
+  async function handleHistoryDownload() {
+    setHistoryError("");
+    setDownloadingHistory(true);
+    try {
+      await onDownloadPaymentHistory();
+    } catch (downloadError) {
+      setHistoryError(downloadError.message);
+    } finally {
+      setDownloadingHistory(false);
     }
   }
 
@@ -220,9 +303,9 @@ export default function StudentDetails({
             <button
               type="button"
               className="secondary-button"
-              onClick={() => setShowPaymentForm((current) => !current)}
+              onClick={handleOpenPaymentSection}
             >
-              {showPaymentForm ? "Hide payment form" : "Record Payment"}
+              Record Payment
             </button>
             <button
               type="button"
@@ -230,7 +313,7 @@ export default function StudentDetails({
               onClick={handleStatementDownload}
               disabled={downloadingStatement}
             >
-              {downloadingStatement ? "Generating PDF..." : "Generate PDF"}
+              {downloadingStatement ? "Generating PDF..." : "Balance PDF"}
             </button>
             <button type="button" className="ghost-button" onClick={onEditStudent}>
               Edit Student
@@ -351,7 +434,7 @@ export default function StudentDetails({
         ) : null}
       </section>
 
-      <section className="section-card">
+      <section className="section-card" ref={paymentSectionRef}>
         <div className="section-header">
           <div>
             <h3>Record offline payment</h3>
@@ -359,10 +442,22 @@ export default function StudentDetails({
               Open this section only when a parent payment is received and assign the amount to one or more fee heads.
             </p>
           </div>
-          <button type="button" className="section-toggle" onClick={() => setShowPaymentForm((current) => !current)}>
-            {showPaymentForm ? "Hide payment" : "Open payment"}
-          </button>
+          <div className="section-actions">
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={handleReceiptDownload}
+              disabled={downloadingReceipt}
+            >
+              {downloadingReceipt ? "Generating receipt..." : "Receipt PDF"}
+            </button>
+            <button type="button" className="section-toggle" onClick={handlePaymentSectionToggle}>
+              {showPaymentForm ? "Hide payment" : "Open payment"}
+            </button>
+          </div>
         </div>
+
+        {receiptError ? <div className="error-banner">{receiptError}</div> : null}
 
         {showPaymentForm ? (
           <form className="payment-form" onSubmit={handleSubmit}>
@@ -421,10 +516,17 @@ export default function StudentDetails({
               Select any past receipt to inspect its component-wise split, note, and total received amount.
             </p>
           </div>
-          <button type="button" className="section-toggle" onClick={() => setShowHistory((current) => !current)}>
-            {showHistory ? "Hide history" : "Show history"}
-          </button>
+          <div className="section-actions">
+            <button type="button" className="ghost-button" onClick={handleHistoryDownload} disabled={downloadingHistory}>
+              {downloadingHistory ? "Generating history..." : "History PDF"}
+            </button>
+            <button type="button" className="section-toggle" onClick={() => setShowHistory((current) => !current)}>
+              {showHistory ? "Hide history" : "Show history"}
+            </button>
+          </div>
         </div>
+
+        {historyError ? <div className="error-banner">{historyError}</div> : null}
 
         {showHistory ? (
           student.payment_transactions.length === 0 ? (

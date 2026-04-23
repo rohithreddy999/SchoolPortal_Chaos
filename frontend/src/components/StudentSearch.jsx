@@ -30,6 +30,7 @@ export default function StudentSearch({
   onSearch,
   onSelect,
   results,
+  hasSearched,
   loading,
   selectedStudentId
 }) {
@@ -54,7 +55,9 @@ export default function StudentSearch({
           <p className="panel-note">
             {results.length > 0
               ? `${results.length} record${results.length === 1 ? "" : "s"} ready to inspect.`
-              : "Search by admission number and academic year for the exact school fee record."}
+              : hasSearched
+                ? "No student matched the search you entered."
+                : "Search by admission number, academic year, student name, or class."}
           </p>
         </div>
         <button type="button" className="section-toggle" onClick={() => setIsOpen((current) => !current)}>
@@ -108,7 +111,9 @@ export default function StudentSearch({
           <div className="results-list">
             {results.length === 0 ? (
               <p className="muted-text">
-                No students loaded yet. Search by admission number and year or leave blank to view recent records.
+                {hasSearched
+                  ? "No such student found for the entered search."
+                  : "Search for a student to load matching records here."}
               </p>
             ) : null}
 

@@ -5,6 +5,8 @@ import StudentForm from "./components/StudentForm";
 import StudentSearch, { emptySearchFilters } from "./components/StudentSearch";
 import {
   createStudent,
+  downloadPaymentReceipt,
+  downloadStudentPaymentHistory,
   downloadStudentStatement,
   getCurrentUser,
   getStudent,
@@ -34,6 +36,10 @@ function saveSession(session) {
   window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
 
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
 function normalizeStudentPayload(form) {
   return {
     ...form,
@@ -45,6 +51,26 @@ function normalizeStudentPayload(form) {
     books_fee: Number(form.books_fee || 0),
     concession_transport: Number(form.concession_transport || 0)
   };
+}
+
+function hasSearchFilters(filters) {
+  return Object.values(filters).some((value) => String(value || "").trim() !== "");
+}
+
+function matchesSearchFilters(student, filters) {
+  if (filters.admission_number && normalizeText(student.admission_number) !== normalizeText(filters.admission_number)) {
+    return false;
+  }
+  if (filters.academic_year && normalizeText(student.academic_year) !== normalizeText(filters.academic_year)) {
+    return false;
+  }
+  if (filters.student_name && !normalizeText(student.student_name).includes(normalizeText(filters.student_name))) {
+    return false;
+  }
+  if (filters.class_name && normalizeText(student.class_name) !== normalizeText(filters.class_name)) {
+    return false;
+  }
+  return true;
 }
 
 function toStudentListItem(student) {
@@ -66,6 +92,26 @@ function upsertStudent(results, student) {
   return [nextItem, ...otherStudents].sort((left, right) => left.student_name.localeCompare(right.student_name));
 }
 
+function syncStudentWithSearchResults(results, student, filters) {
+  const nextItem = toStudentListItem(student);
+  const otherStudents = results.filter((item) => item.id !== nextItem.id);
+  if (!matchesSearchFilters(nextItem, filters)) {
+    return otherStudents;
+  }
+  return upsertStudent(results, student);
+}
+
+function downloadBlobToBrowser({ blob, filename }) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = window.document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  window.document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 0);
+}
+
 export default function App() {
   const [session, setSession] = useState(loadSession);
   const [user, setUser] = useState(loadSession()?.user || null);
@@ -73,12 +119,14 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [searchFilters, setSearchFilters] = useState(emptySearchFilters);
   const [searchResults, setSearchResults] = useState([]);
+  const [hasSearched, setHasSearched] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [activeStudentId, setActiveStudentId] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [studentLoading, setStudentLoading] = useState(false);
   const [studentLoadError, setStudentLoadError] = useState("");
   const [studentFormMode, setStudentFormMode] = useState(null);
+  const [studentFormScrollKey, setStudentFormScrollKey] = useState(0);
   const [saveError, setSaveError] = useState("");
   const [savingStudent, setSavingStudent] = useState(false);
   const [paymentError, setPaymentError] = useState("");
@@ -107,13 +155,6 @@ export default function App() {
     };
   }, [session?.token]);
 
-  useEffect(() => {
-    if (!session?.token) {
-      return;
-    }
-    handleSearch(searchFilters);
-  }, [session?.token]);
-
   async function handleLogin(credentials) {
     setAuthLoading(true);
     setAuthError("");
@@ -138,6 +179,7 @@ export default function App() {
     setStudentLoadError("");
     setStudentFormMode(null);
     setSearchResults([]);
+    setHasSearched(false);
     saveSession(null);
   }
 
@@ -146,10 +188,17 @@ export default function App() {
       return;
     }
 
+    if (!hasSearchFilters(filters)) {
+      setSearchResults([]);
+      setHasSearched(true);
+      return;
+    }
+
     setSearchLoading(true);
     try {
       const students = await searchStudents(session.token, filters);
       setSearchResults(students);
+      setHasSearched(true);
     } finally {
       setSearchLoading(false);
     }
@@ -157,7 +206,7 @@ export default function App() {
 
   async function handleStudentSave(form) {
     if (!session?.token) {
-      return;
+      return null;
     }
 
     const isEditMode = studentFormMode === "edit" && selectedStudent;
@@ -171,9 +220,13 @@ export default function App() {
       setActiveStudentId(student.id);
       setSelectedStudent(student);
       setStudentFormMode(null);
-      setSearchResults((current) => upsertStudent(current, student));
+      if (hasSearched) {
+        setSearchResults((current) => syncStudentWithSearchResults(current, student, searchFilters));
+      }
+      return student;
     } catch (error) {
       setSaveError(error.message);
+      return null;
     } finally {
       setSavingStudent(false);
     }
@@ -181,12 +234,12 @@ export default function App() {
 
   async function handleRecordPayment(payload) {
     if (!session?.token || !selectedStudent) {
-      return;
+      return null;
     }
 
     if (payload.allocations.length === 0) {
       setPaymentError("Enter at least one component amount before saving the payment.");
-      return;
+      return null;
     }
 
     setStudentLoadError("");
@@ -196,9 +249,13 @@ export default function App() {
       const student = await recordPayment(session.token, selectedStudent.id, payload);
       setActiveStudentId(student.id);
       setSelectedStudent(student);
-      setSearchResults((current) => upsertStudent(current, student));
+      if (hasSearched) {
+        setSearchResults((current) => syncStudentWithSearchResults(current, student, searchFilters));
+      }
+      return student;
     } catch (error) {
       setPaymentError(error.message);
+      return null;
     } finally {
       setSavingPayment(false);
     }
@@ -209,15 +266,23 @@ export default function App() {
       return;
     }
 
-    const { blob, filename } = await downloadStudentStatement(session.token, selectedStudent.id);
-    const objectUrl = window.URL.createObjectURL(blob);
-    const link = window.document.createElement("a");
-    link.href = objectUrl;
-    link.download = filename;
-    window.document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 0);
+    downloadBlobToBrowser(await downloadStudentStatement(session.token, selectedStudent.id));
+  }
+
+  async function handleDownloadPaymentReceipt(transactionId) {
+    if (!session?.token || !selectedStudent || !transactionId) {
+      return;
+    }
+
+    downloadBlobToBrowser(await downloadPaymentReceipt(session.token, selectedStudent.id, transactionId));
+  }
+
+  async function handleDownloadPaymentHistory() {
+    if (!session?.token || !selectedStudent) {
+      return;
+    }
+
+    downloadBlobToBrowser(await downloadStudentPaymentHistory(session.token, selectedStudent.id));
   }
 
   async function handleSelectStudent(student) {
@@ -248,6 +313,7 @@ export default function App() {
   function handleOpenCreateForm() {
     setSaveError("");
     setStudentFormMode("create");
+    setStudentFormScrollKey((current) => current + 1);
   }
 
   function handleOpenEditForm() {
@@ -256,6 +322,7 @@ export default function App() {
     }
     setSaveError("");
     setStudentFormMode("edit");
+    setStudentFormScrollKey((current) => current + 1);
   }
 
   function handleCloseStudentForm() {
@@ -324,6 +391,7 @@ export default function App() {
             onSearch={() => handleSearch(searchFilters)}
             onSelect={handleSelectStudent}
             results={searchResults}
+            hasSearched={hasSearched}
             loading={searchLoading}
             selectedStudentId={activeStudentId}
           />
@@ -335,6 +403,7 @@ export default function App() {
               saving={savingStudent}
               error={saveError}
               onClose={handleCloseStudentForm}
+              scrollRequestKey={studentFormScrollKey}
             />
           ) : null}
         </div>
@@ -345,6 +414,8 @@ export default function App() {
           loadError={studentLoadError}
           onRecordPayment={handleRecordPayment}
           onDownloadStatement={handleDownloadStatement}
+          onDownloadPaymentReceipt={handleDownloadPaymentReceipt}
+          onDownloadPaymentHistory={handleDownloadPaymentHistory}
           savingPayment={savingPayment}
           error={paymentError}
           onEditStudent={handleOpenEditForm}
